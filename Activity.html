@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <title>ระบบแลกคูปองร้านอาหาร</title>
+    <link rel="stylesheet" type="text/css" href="main.css">
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.10.4/dist/web3.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.slim.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Mali:wght@300;400;500&display=swap');
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="status" id="status">กำลังโหลด...</div>
+
+        <div class="nav">
+            <button class="nav-btn active" onclick="showPage('coupons', event)">รายการคูปอง</button>
+            <button class="nav-btn" onclick="showPage('reservations', event)">ประวัติการแลกคูปอง</button>
+        </div>
+
+        <!-- Coupons Page -->
+        <div id="coupons-page" class="page active">
+            <div class="coupon-grid"></div>
+        </div>
+
+        <!-- Reservations Page -->
+        <div id="reservations-page" class="page">
+            <h2>ประวัติการแลกคูปอง</h2>
+            <table class="reservations-table">
+                <thead>
+                    <tr>
+                        <th>เวลา</th>
+                        <th>คูปอง</th>
+                        <th>ผู้แลก (address)</th>
+                    </tr>
+                </thead>
+                <tbody id="reservationsBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const coupons = [
+            { id: 1, name: "คูปองร้านอาหาร A", price: "0.0001 Ether", image: "./images/coupon1.jpg" },
+            { id: 2, name: "คูปองร้านอาหาร B", price: "0.0001 Ether", image: "./images/coupon2.jpg" },
+            { id: 3, name: "1 Hour (ชั่วโมงจิตอาสา)", price: "0.0001 Ether", image: "./images/time.jpg" },
+        ];
+
+        const couponGrid = document.querySelector('.coupon-grid');
+        coupons.forEach(coupon => {
+            couponGrid.innerHTML += `
+                <div class="coupon-card">
+                    <div class="logo-container">
+                        <img src="${coupon.image}" alt="Coupon Image" class="coupon-avatar">
+                    </div>
+                    <div class="coupon-info">
+                        <div class="coupon-name">${coupon.name}</div>
+                        <div class="price">${coupon.price}</div>
+                    </div>
+                    <button class="redeem-btn" onclick="redeemCoupon(${coupon.id})">แลกคูปอง</button>
+                </div>
+            `;
+        });
+
+        async function loadWeb3() {
+            if (window.ethereum) {
+                window.web3 = new Web3(window.ethereum);
+                try {
+                    await window.ethereum.request({ method: 'eth_requestAccounts' });
+                    return true;
+                } catch (error) {
+                    console.error("User denied account access");
+                    return false;
+                }
+            } else {
+                updateStatus('กรุณาติดตั้ง MetaMask เพื่อใช้งาน SUT coin');
+                return false;
+            }
+        }
+
+        let currentAccount = null;
+
+        function showPage(pageId, event) {
+            document.querySelectorAll('.page').forEach(page => {
+                page.classList.remove('active');
+            });
+            document.getElementById(pageId + '-page').classList.add('active');
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            if (event && event.target) {
+                event.target.classList.add('active');
+            }
+            localStorage.setItem('activePage', pageId);
+            if (pageId === 'reservations') {
+                loadReservations();
+            }
+        }
+
+        window.onload = () => {
+            const activePage = localStorage.getItem('activePage') || 'coupons';
+            showPage(activePage);
+        };
+
+        function handleAccountsChanged(accounts) {
+            if (accounts.length === 0) {
+                updateStatus('กรุณาเชื่อมต่อกับ MetaMask');
+            } else if (accounts[0] !== currentAccount) {
+                currentAccount = accounts[0];
+                updateStatus(`เชื่อมต่อแล้ว: ${currentAccount.substring(0, 6)}...${currentAccount.substring(38)}`);
+                loadReservations();
+            }
+        }
+
+        const CONTRACT_ADDRESS = '0x333837BCa7D90ddaB6c047d280D431be9157D9cc';
+        const ABI = [
+	{
+		"inputs": [],
+		"stateMutability": "nonpayable",
+		"type": "constructor"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "uint256",
+				"name": "reservationId",
+				"type": "uint256"
+			},
+			{
+				"indexed": true,
+				"internalType": "uint256",
+				"name": "couponId",
+				"type": "uint256"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "timeSlot",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "couponName",
+				"type": "string"
+			}
+		],
+		"name": "ReservationCreated",
+		"type": "event"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"name": "couponSchedule",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getAllReservations",
+		"outputs": [
+			{
+				"internalType": "uint256[]",
+				"name": "times",
+				"type": "uint256[]"
+			},
+			{
+				"internalType": "string[]",
+				"name": "coupons",
+				"type": "string[]"
+			},
+			{
+				"internalType": "address[]",
+				"name": "users",
+				"type": "address[]"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "nextReservationId",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "owner",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"name": "reservations",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "couponId",
+				"type": "uint256"
+			},
+			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "timeSlot",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "price",
+				"type": "uint256"
+			},
+			{
+				"internalType": "string",
+				"name": "couponName",
+				"type": "string"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "couponId",
+				"type": "uint256"
+			}
+		],
+		"name": "reserveCoupon",
+		"outputs": [],
+		"stateMutability": "payable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"name": "userReservations",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "withdraw",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	}
+];
+
+        async function redeemCoupon(couponId) {
+            if (!currentAccount) {
+                updateStatus('กรุณาเชื่อมต่อกระเป๋าเงินก่อน');
+                return;
+            }
+
+            try {
+                const contract = new web3.eth.Contract(ABI, CONTRACT_ADDRESS);
+                const price = '0.0001';
+                const priceInWei = web3.utils.toWei(price, 'ether');
+                
+                const transaction = await contract.methods.reserveCoupon(couponId)
+                    .send({
+                        from: currentAccount,
+                        value: priceInWei
+                    });
+
+                updateStatus('แลกคูปองสำเร็จ! Transaction: ' + transaction.transactionHash);
+                showPage('reservations', null);
+            } catch (error) {
+                updateStatus('เกิดข้อผิดพลาดในการแลกคูปอง: ' + error.message);
+            }
+        }
+
+        const couponMappinng = {
+            "Coupon1": "คูปองร้านอาหาร A",
+            "Coupon2": "คูปองร้านอาหาร B",
+            "Coupon3": "1 Hour (ชั่วโมงจิตอาสา)",
+            "Unknown Counpon": "ไม่มีคูปอง"
+        };
+
+        function loadReservations() {
+            const contract = new web3.eth.Contract(ABI, CONTRACT_ADDRESS);
+            
+            contract.methods.getAllReservations().call()
+                .then(result => {
+                    const { times, coupons, users } = result;
+                    const reservationsBody = document.getElementById('reservationsBody');
+                    
+                    let html = '';
+                    for(let i = 0; i < times.length; i++) {
+                        const date = new Date(times[i] * 1000);
+                        const thaiCouponname = couponMappinng[coupons[i]] || coupons[i];
+                        html += `
+                            <tr>
+                                <td>${date.toLocaleTimeString()}</td>
+                                <td>${coupons[i]}</td>
+                                <td>${users[i]}</td>
+                            </tr>
+                        `;
+                    }
+                    
+                    reservationsBody.innerHTML = html;
+                })
+                .catch(error => {
+                    console.error('Error loading reservations:', error);
+                });
+        }
+
+        function updateStatus(message) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            console.log(message);
+        }
+
+        async function init() {
+            if (await loadWeb3()) {
+                window.ethereum.on('accountsChanged', handleAccountsChanged);
+                const accounts = await web3.eth.getAccounts();
+                handleAccountsChanged(accounts);
+                updateStatus('พร้อมใช้งาน!');
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
